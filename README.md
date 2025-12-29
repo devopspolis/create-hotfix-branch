@@ -29,7 +29,7 @@ The action:
     git push origin v1.2.3
 
 # Then create the hotfix branch
-- uses: devopspolis/create-hotfix-branch@main
+- uses: devopspolis/create-hotfix-branch@v1
   with:
     version: 'v1.2.3'
     create_remote_branch: true
@@ -84,7 +84,7 @@ If using the default `GITHUB_TOKEN`, these permissions are typically available. 
 
 - name: Create hotfix branch
   id: create-hotfix
-  uses: devopspolis/create-hotfix-branch@main
+  uses: devopspolis/create-hotfix-branch@v1
   with:
     version: 'v1.2.3'
 
@@ -110,7 +110,7 @@ If using the default `GITHUB_TOKEN`, these permissions are typically available. 
 
 - name: Create hotfix branch
   id: create-hotfix
-  uses: devopspolis/create-hotfix-branch@main
+  uses: devopspolis/create-hotfix-branch@v1
   with:
     version: 'v1.2.3'
     create_remote_branch: true
