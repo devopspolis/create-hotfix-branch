@@ -1,0 +1,127 @@
+name: Create Major Version Tag
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  create-major-version-tag:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Extract version info
+        id: version
+        run: |
+          # Extract version from tag (e.g., v1.2.3 -> 1.2.3)
+          RELEASE_TAG=${GITHUB_REF#refs/tags/}
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          
+          # Validate tag format (must start with 'v' and contain semantic version)
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
+            echo "❌ Invalid tag format: $RELEASE_TAG"
+            echo "💡 Expected format: v1.2.3 or v1.2.3-alpha.1"
+            exit 1
+          fi
+          
+          # Extract major version (e.g., v1.2.3 -> v1)
+          MAJOR_VERSION=$(echo "$RELEASE_TAG" | cut -d. -f1)
+          echo "major_version=$MAJOR_VERSION" >> $GITHUB_OUTPUT
+          
+          echo "✅ Release tag: $RELEASE_TAG"
+          echo "✅ Major version tag: $MAJOR_VERSION"
+      
+      - name: Check if major version tag exists
+        id: check-tag
+        run: |
+          MAJOR_TAG="${{ steps.version.outputs.major_version }}"
+          
+          # Check if the major version tag exists
+          if git tag -l "$MAJOR_TAG" | grep -q "^$MAJOR_TAG$"; then
+            echo "tag_exists=true" >> $GITHUB_OUTPUT
+            EXISTING_COMMIT=$(git rev-list -n 1 "$MAJOR_TAG")
+            echo "existing_commit=$EXISTING_COMMIT" >> $GITHUB_OUTPUT
+            echo "⚠️ Major version tag $MAJOR_TAG already exists (commit: $EXISTING_COMMIT)"
+          else
+            echo "tag_exists=false" >> $GITHUB_OUTPUT
+            echo "✅ Major version tag $MAJOR_TAG does not exist"
+          fi
+      
+      - name: Create or update major version tag
+        run: |
+          RELEASE_TAG="${{ steps.version.outputs.release_tag }}"
+          MAJOR_TAG="${{ steps.version.outputs.major_version }}"
+          RELEASE_COMMIT=$(git rev-list -n 1 "$RELEASE_TAG")
+          
+          echo "🏷️ Processing major version tag: $MAJOR_TAG"
+          echo "📍 Release tag: $RELEASE_TAG (commit: $RELEASE_COMMIT)"
+          
+          if [[ "${{ steps.check-tag.outputs.tag_exists }}" == "true" ]]; then
+            EXISTING_COMMIT="${{ steps.check-tag.outputs.existing_commit }}"
+            
+            if [[ "$EXISTING_COMMIT" == "$RELEASE_COMMIT" ]]; then
+              echo "✅ Major version tag $MAJOR_TAG already points to the correct commit"
+              echo "Nothing to do."
+              exit 0
+            fi
+            
+            echo "🔄 Updating existing major version tag $MAJOR_TAG"
+            echo "   From commit: $EXISTING_COMMIT"
+            echo "   To commit: $RELEASE_COMMIT"
+            
+            # Delete the existing tag locally and remotely
+            git tag -d "$MAJOR_TAG" || true
+            git push origin --delete "$MAJOR_TAG" || true
+          else
+            echo "🆕 Creating new major version tag $MAJOR_TAG"
+          fi
+          
+          # Create the new tag pointing to the release commit
+          git tag "$MAJOR_TAG" "$RELEASE_COMMIT"
+          
+          # Push the tag to remote
+          git push origin "$MAJOR_TAG"
+          
+          echo "✅ Successfully created/updated major version tag $MAJOR_TAG"
+          echo "📍 Tag $MAJOR_TAG now points to commit $RELEASE_COMMIT ($RELEASE_TAG)"
+      
+      - name: Verify tag creation
+        run: |
+          MAJOR_TAG="${{ steps.version.outputs.major_version }}"
+          RELEASE_TAG="${{ steps.version.outputs.release_tag }}"
+          
+          # Verify the tag was created successfully
+          if git tag -l "$MAJOR_TAG" | grep -q "^$MAJOR_TAG$"; then
+            NEW_COMMIT=$(git rev-list -n 1 "$MAJOR_TAG")
+            RELEASE_COMMIT=$(git rev-list -n 1 "$RELEASE_TAG")
+            
+            if [[ "$NEW_COMMIT" == "$RELEASE_COMMIT" ]]; then
+              echo "✅ Verification successful: $MAJOR_TAG points to $RELEASE_TAG"
+            else
+              echo "❌ Verification failed: Tag points to wrong commit"
+              echo "   Expected: $RELEASE_COMMIT ($RELEASE_TAG)"
+              echo "   Actual: $NEW_COMMIT"
+              exit 1
+            fi
+          else
+            echo "❌ Verification failed: Major version tag $MAJOR_TAG not found"
+            exit 1
+          fi
+      
+      - name: Summary
+        run: |
+          echo "## 🎉 Major Version Tag Created/Updated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release:** ${{ steps.version.outputs.release_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Major Version Tag:** ${{ steps.version.outputs.major_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Action:** ${{ steps.check-tag.outputs.tag_exists == 'true' && 'Updated' || 'Created' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Users can now reference this action using \`${{ steps.version.outputs.major_version }}\` for automatic updates within the major version." >> $GITHUB_STEP_SUMMARY
