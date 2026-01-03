@@ -16,6 +16,11 @@ inputs:
     type: boolean
     required: false
     default: false
+  repo_path:
+    description: Path to the git repository
+    type: string
+    required: false
+    default: .
 
 outputs:
   repository:
@@ -49,171 +54,176 @@ outputs:
 runs:
   using: composite
   steps:
-      - name: Validate version format
-        shell: bash
-        run: |
-          if [[ "${{ inputs.version }}" =~ ^v[0-9]+\.[0-9]+\.0$ ]]; then
-            echo "::notice::Version ${{ inputs.version }} is a feature release (vX.Y.0), not a hotfix. Skipping branch creation."
-            exit 0
-          elif [[ "${{ inputs.version }}" =~ ^v[0-9]+\.[0-9]+\.[1-9]+[0-9]*$ ]]; then
-            echo "::notice::Version ${{ inputs.version }} is a valid hotfix release"
-          else
-            echo "::error::Invalid version format: ${{ inputs.version }}"
-            echo "::error::Expected format: vX.Y.Z where Z > 0 (e.g., v1.2.3)"
-            exit 1
-          fi
-
-      - name: Set default outputs
-        shell: bash
-        run: |
-          echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
-          echo "CREATE_REMOTE_BRANCH=${{ inputs.create_remote_branch }}" >> $GITHUB_ENV
-          echo "BASE_RELEASE=" >> $GITHUB_ENV
-          echo "RELEASE_TYPE=hotfix" >> $GITHUB_ENV
-          echo "COMMITS=" >> $GITHUB_ENV
-          echo "REMOTE_BRANCH_CREATED=false" >> $GITHUB_ENV
-          echo "CREATED=false" >> $GITHUB_ENV
-          echo "BRANCH_NAME=${{ inputs.version }}" >> $GITHUB_ENV
-          echo "COMMIT_COUNT=0" >> $GITHUB_ENV
-
-      - name: Fetch tags
-        shell: bash
-        run: git fetch --tags
-
-      - name: Configure git user
-        shell: bash
-        run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Check if version branch exists
-        id: check-version-branch
-        shell: bash
-        run: |
-          if git rev-parse --verify --quiet origin/${{ inputs.version }}; then
-            echo "::notice::Remote branch ${{ inputs.version }} already exists. Skipping creation (idempotent behavior)."
-            echo "VERSION_BRANCH_EXISTS=true" >> $GITHUB_OUTPUT
-          else
-            echo "::notice::Remote branch ${{ inputs.version }} does not exist. Will create new branch."
-            echo "VERSION_BRANCH_EXISTS=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Validate version tag exists
-        id: validate-version-tag
-        uses: devopspolis/git-tag-exists@v1
-        with:
-          tag: ${{ env.VERSION }}
-
-      - name: Fail if version tag does not exist
-        if: steps.validate-version-tag.outputs.exists != 'true'
-        shell: bash
-        run: |
-          echo "::error::Version tag '${{ inputs.version }}' does not exist"
-          echo "::error::Create the tag before running this action:"
-          echo "::error::  git tag ${{ inputs.version }}"
-          echo "::error::  git push origin ${{ inputs.version }}"
+    - name: Validate version format
+      shell: bash
+      run: |
+        if [[ "${{ inputs.version }}" =~ ^v[0-9]+\.[0-9]+\.0$ ]]; then
+          echo "::notice::Version ${{ inputs.version }} is a feature release (vX.Y.0), not a hotfix. Skipping branch creation."
+          exit 0
+        elif [[ "${{ inputs.version }}" =~ ^v[0-9]+\.[0-9]+\.[1-9]+[0-9]*$ ]]; then
+          echo "::notice::Version ${{ inputs.version }} is a valid hotfix release"
+        else
+          echo "::error::Invalid version format: ${{ inputs.version }}"
+          echo "::error::Expected format: vX.Y.Z where Z > 0 (e.g., v1.2.3)"
           exit 1
+        fi
 
-      - name: Get major.minor version
-        shell: bash
-        run: echo "${{ env.VERSION }}" | cut -d. -f1,2 | sed -e 's/^/MINOR_VERSION=/' >> $GITHUB_ENV
+    - name: Set default outputs
+      shell: bash
+      run: |
+        echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
+        echo "CREATE_REMOTE_BRANCH=${{ inputs.create_remote_branch }}" >> $GITHUB_ENV
+        echo "BASE_RELEASE=" >> $GITHUB_ENV
+        echo "RELEASE_TYPE=hotfix" >> $GITHUB_ENV
+        echo "COMMITS=" >> $GITHUB_ENV
+        echo "REMOTE_BRANCH_CREATED=false" >> $GITHUB_ENV
+        echo "CREATED=false" >> $GITHUB_ENV
+        echo "BRANCH_NAME=${{ inputs.version }}" >> $GITHUB_ENV
+        echo "COMMIT_COUNT=0" >> $GITHUB_ENV
 
-      - name: Set Base Release
-        shell: bash
-        run: echo "BASE_RELEASE=${{ env.MINOR_VERSION }}.0" >> $GITHUB_ENV
+    - name: Fetch tags
+      shell: bash
+      working-directory: ${{ inputs.repo_path }}
+      run: git fetch --tags
 
-      - name: Check if base release tag exists
-        id: check-base-release-tag
-        uses: devopspolis/git-tag-exists@v1
-        with:
-          tag: ${{ env.BASE_RELEASE }}
+    - name: Configure git user
+      shell: bash
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Set BASE_RELEASE_EXISTS variable
-        shell: bash
-        run: echo "BASE_RELEASE_EXISTS=${{ steps.check-base-release-tag.outputs.exists }}" >> $GITHUB_ENV
+    - name: Check if version branch exists
+      id: check-version-branch
+      shell: bash
+      working-directory: ${{ inputs.repo_path }}
+      run: |
+        if git rev-parse --verify --quiet origin/${{ inputs.version }}; then
+          echo "::notice::Remote branch ${{ inputs.version }} already exists. Skipping creation (idempotent behavior)."
+          echo "VERSION_BRANCH_EXISTS=true" >> $GITHUB_OUTPUT
+        else
+          echo "::notice::Remote branch ${{ inputs.version }} does not exist. Will create new branch."
+          echo "VERSION_BRANCH_EXISTS=false" >> $GITHUB_OUTPUT
+        fi
 
-      - name: Exit if base release tag does not exist
-        shell: bash
-        run: |
-          if [ "${{ env.BASE_RELEASE_EXISTS }}" != "true" ]; then
-            echo "::error::Base release tag ${{ env.BASE_RELEASE }} not found"
-            echo "::error::This action requires a base release (vX.Y.0) to branch from"
-            echo "::error::For hotfix ${{ env.VERSION }}, tag ${{ env.BASE_RELEASE }} must exist"
-            exit 1
-          fi
+    - name: Validate version tag exists
+      id: validate-version-tag
+      uses: devopspolis/git-tag-exists@v1
+      with:
+        tag: ${{ env.VERSION }}
 
-      - name: Get Hotfix commits
-        id: hotfix-commits
-        uses: devopspolis/git-matching-commits@v1 # https://github.com/marketplace/actions/git-matching-commits
-        with:
-          start_ref: ${{ env.BASE_RELEASE }}
-          end_ref: ${{ inputs.version }}
-          github_token: ${{ github.token }}
-          github_repository: ${{ github.repository }}
-          github_labels: hotfix
+    - name: Fail if version tag does not exist
+      if: steps.validate-version-tag.outputs.exists != 'true'
+      shell: bash
+      run: |
+        echo "::error::Version tag '${{ inputs.version }}' does not exist"
+        echo "::error::Create the tag before running this action:"
+        echo "::error::  git tag ${{ inputs.version }}"
+        echo "::error::  git push origin ${{ inputs.version }}"
+        exit 1
 
-      - name: Set COMMITS output
-        shell: bash
-        run: |
-          echo "COMMITS=${{ steps.hotfix-commits.outputs.commits }}" >> $GITHUB_ENV
-          echo "COMMIT_COUNT=${{ steps.hotfix-commits.outputs.count }}" >> $GITHUB_ENV
+    - name: Get major.minor version
+      shell: bash
+      run: echo "${{ env.VERSION }}" | cut -d. -f1,2 | sed -e 's/^/MINOR_VERSION=/' >> $GITHUB_ENV
 
+    - name: Set Base Release
+      shell: bash
+      run: echo "BASE_RELEASE=${{ env.MINOR_VERSION }}.0" >> $GITHUB_ENV
 
-      - name: Validate hotfix commits found
-        shell: bash
-        run: |
-          count="${{ steps.hotfix-commits.outputs.count }}"
-          commits="${{ steps.hotfix-commits.outputs.commits }}"
+    - name: Check if base release tag exists
+      id: check-base-release-tag
+      uses: devopspolis/git-tag-exists@v1
+      with:
+        tag: ${{ env.BASE_RELEASE }}
 
-          if [ -z "$commits" ] || [ "$count" = "0" ]; then
-            echo "::warning::No hotfix commits found between ${{ env.BASE_RELEASE }} and ${{ inputs.version }}"
-            echo "::warning::Branch will be identical to base release ${{ env.BASE_RELEASE }}"
-            echo "::warning::Verify that:"
-            echo "::warning::  1. PRs for desired commits have the 'hotfix' label"
-            echo "::warning::  2. Commits exist between ${{ env.BASE_RELEASE }} and ${{ inputs.version }}"
-          else
-            echo "::notice::Found $count hotfix commit(s) to cherry-pick"
-          fi
+    - name: Set BASE_RELEASE_EXISTS variable
+      shell: bash
+      run: echo "BASE_RELEASE_EXISTS=${{ steps.check-base-release-tag.outputs.exists }}" >> $GITHUB_ENV
 
-      - name: Create local version branch if remote branch does not exist
-        if: steps.check-version-branch.outputs.VERSION_BRANCH_EXISTS != 'true'
-        shell: bash
-        run: |
-          git checkout -b ${{ env.VERSION }} ${{ env.BASE_RELEASE }}
+    - name: Exit if base release tag does not exist
+      shell: bash
+      run: |
+        if [ "${{ env.BASE_RELEASE_EXISTS }}" != "true" ]; then
+          echo "::error::Base release tag ${{ env.BASE_RELEASE }} not found"
+          echo "::error::This action requires a base release (vX.Y.0) to branch from"
+          echo "::error::For hotfix ${{ env.VERSION }}, tag ${{ env.BASE_RELEASE }} must exist"
+          exit 1
+        fi
 
-      - name: Cherry pick hotfix commits
-        if: steps.check-version-branch.outputs.VERSION_BRANCH_EXISTS != 'true' && steps.hotfix-commits.outputs.count != '0'
-        id: cherry-pick-hotfix-commits
-        uses: devopspolis/git-cherry-pick-commits@v1
-        with:
-          commits: ${{ steps.hotfix-commits.outputs.commits }}
-          base_ref: ${{ env.BASE_RELEASE }}
-          end_ref: ${{ env.VERSION }}
-          github_repository: ${{ github.repository }}
-          github_token: ${{ github.token }}
+    - name: Get Hotfix commits
+      id: hotfix-commits
+      uses: devopspolis/git-matching-commits@v1 # https://github.com/marketplace/actions/git-matching-commits
+      with:
+        repo_path: ${{ inputs.repo_path }}
+        start_ref: ${{ env.BASE_RELEASE }}
+        end_ref: ${{ inputs.version }}
+        github_token: ${{ github.token }}
+        github_repository: ${{ github.repository }}
+        github_labels: hotfix
 
-      - name: Mark branch as created
-        if: steps.check-version-branch.outputs.VERSION_BRANCH_EXISTS != 'true'
-        shell: bash
-        run: |
-          echo "CREATED=true" >> $GITHUB_ENV
+    - name: Set COMMITS output
+      shell: bash
+      run: |
+        echo "COMMITS=${{ steps.hotfix-commits.outputs.commits }}" >> $GITHUB_ENV
+        echo "COMMIT_COUNT=${{ steps.hotfix-commits.outputs.count }}" >> $GITHUB_ENV
 
-      - name: Push commits to remote version branch
-        if: env.CREATE_REMOTE_BRANCH == 'true' && env.CREATED == 'true'
-        shell: bash
-        run: |
-          git push origin refs/heads/${{ env.VERSION }}
-          echo "REMOTE_BRANCH_CREATED=true" >> $GITHUB_ENV
-      
-      - name: Show Outputs
-        shell: bash
-        run: |
-          echo "repository: ${{ github.repository }}"
-          echo "version: ${{ env.VERSION }}"
-          echo "base_release: ${{ env.BASE_RELEASE }}"
-          echo "release_type: ${{ env.RELEASE_TYPE }}"
-          echo "commits: ${{ env.COMMITS }}"
-          echo "commit_count: ${{ env.COMMIT_COUNT }}"
-          echo "branch_name: ${{ env.BRANCH_NAME }}"
-          echo "remote_branch_created: ${{ env.REMOTE_BRANCH_CREATED }}"
-          echo "created: ${{ env.CREATED }}"
+    - name: Validate hotfix commits found
+      shell: bash
+      run: |
+        count="${{ steps.hotfix-commits.outputs.count }}"
+        commits="${{ steps.hotfix-commits.outputs.commits }}"
+
+        if [ -z "$commits" ] || [ "$count" = "0" ]; then
+          echo "::warning::No hotfix commits found between ${{ env.BASE_RELEASE }} and ${{ inputs.version }}"
+          echo "::warning::Branch will be identical to base release ${{ env.BASE_RELEASE }}"
+          echo "::warning::Verify that:"
+          echo "::warning::  1. PRs for desired commits have the 'hotfix' label"
+          echo "::warning::  2. Commits exist between ${{ env.BASE_RELEASE }} and ${{ inputs.version }}"
+        else
+          echo "::notice::Found $count hotfix commit(s) to cherry-pick"
+        fi
+
+    - name: Create local version branch if remote branch does not exist
+      if: steps.check-version-branch.outputs.VERSION_BRANCH_EXISTS != 'true'
+      shell: bash
+      working-directory: ${{ inputs.repo_path }}
+      run: |
+        git checkout -b ${{ env.VERSION }} ${{ env.BASE_RELEASE }}
+
+    - name: Cherry pick hotfix commits
+      if: steps.check-version-branch.outputs.VERSION_BRANCH_EXISTS != 'true' && steps.hotfix-commits.outputs.count != '0'
+      id: cherry-pick-hotfix-commits
+      uses: devopspolis/git-cherry-pick-commits@v1
+      with:
+        commits: ${{ steps.hotfix-commits.outputs.commits }}
+        repo_path: ${{ inputs.repo_path }}
+        base_ref: ${{ env.BASE_RELEASE }}
+        end_ref: ${{ env.VERSION }}
+        github_repository: ${{ github.repository }}
+        github_token: ${{ github.token }}
+
+    - name: Mark branch as created
+      if: steps.check-version-branch.outputs.VERSION_BRANCH_EXISTS != 'true'
+      shell: bash
+      run: |
+        echo "CREATED=true" >> $GITHUB_ENV
+
+    - name: Push commits to remote version branch
+      if: env.CREATE_REMOTE_BRANCH == 'true' && env.CREATED == 'true'
+      shell: bash
+      working-directory: ${{ inputs.repo_path }}
+      run: |
+        git push origin refs/heads/${{ env.VERSION }}
+        echo "REMOTE_BRANCH_CREATED=true" >> $GITHUB_ENV
+
+    - name: Show Outputs
+      shell: bash
+      run: |
+        echo "repository: ${{ github.repository }}"
+        echo "version: ${{ env.VERSION }}"
+        echo "base_release: ${{ env.BASE_RELEASE }}"
+        echo "release_type: ${{ env.RELEASE_TYPE }}"
+        echo "commits: ${{ env.COMMITS }}"
+        echo "commit_count: ${{ env.COMMIT_COUNT }}"
+        echo "branch_name: ${{ env.BRANCH_NAME }}"
+        echo "remote_branch_created: ${{ env.REMOTE_BRANCH_CREATED }}"
+        echo "created: ${{ env.CREATED }}"
